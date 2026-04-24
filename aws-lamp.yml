@@ -34,7 +34,19 @@
         state: present
 
     # 4. Start and enable services (AWS Step 1)
-    - name: Start and enable Apache
+    - name: Check Apache config
+      command: apachectl configtest
+      register: apache_test
+      changed_when: false
+      failed_when: "'Syntax OK' not in apache_test.stdout"
+
+    - name: Ensure php-fpm is running
+      service:
+        name: php-fpm
+        state: started
+        enabled: yes
+
+    - name: Start Apache only if config is valid
       service:
         name: httpd
         state: started
