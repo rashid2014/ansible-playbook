@@ -1,0 +1,129 @@
+---
+- name: Setup LAMP Stack on Amazon Linux 2023
+  hosts: webservers
+  become: yes
+
+  vars:
+    db_root_password: StrongPassword123
+
+  tasks:
+
+    # 1. Update system (AWS Step 1)
+    - name: Update all packages
+      dnf:
+        name: "*"
+        state: latest
+
+    # 2. Install Apache + PHP (AWS Step 1)
+    - name: Install Apache and PHP packages
+      dnf:
+        name:
+          - httpd
+          - wget
+          - php
+          - php-fpm
+          - php-mysqli
+          - php-json
+          - php-devel
+        state: present
+
+    # 3. Install MariaDB (AWS Step 1)
+    - name: Install MariaDB server
+      dnf:
+        name: mariadb105-server
+        state: present
+
+    # 4. Start and enable services (AWS Step 1)
+    - name: Start and enable Apache
+      service:
+        name: httpd
+        state: started
+        enabled: yes
+
+    - name: Start and enable MariaDB
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Start and enable php-fpm
+      service:
+        name: php-fpm
+        state: started
+        enabled: yes
+
+    # 5. Configure permissions (AWS Step 1)
+    - name: Add ec2-user to apache group
+      user:
+        name: ec2-user
+        groups: apache
+        append: yes
+
+    - name: Change ownership of /var/www
+      file:
+        path: /var/www
+        owner: ec2-user
+        group: apache
+        recurse: yes
+
+    - name: Set directory permissions
+      shell: |
+        chmod 2775 /var/www
+        find /var/www -type d -exec chmod 2775 {} \;
+
+    - name: Set file permissions
+      shell: |
+        find /var/www -type f -exec chmod 0664 {} \;
+
+    # 6. Test PHP (AWS Step 2)
+    - name: Create PHP test page
+      copy:
+        dest: /var/www/html/phpinfo.php
+        content: "<?php phpinfo(); ?>"
+
+    # 7. Install phpMyAdmin dependencies (AWS Step 4)
+    - name: Install phpMyAdmin dependencies
+      dnf:
+        name:
+          - php-mbstring
+          - php-xml
+        state: present
+
+    - name: Restart Apache after PHP modules
+      service:
+        name: httpd
+        state: restarted
+
+    - name: Restart php-fpm
+      service:
+        name: php-fpm
+        state: restarted
+
+    # 8. Install phpMyAdmin manually (AWS Step 4)
+    - name: Download phpMyAdmin
+      get_url:
+        url: https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz
+        dest: /tmp/phpmyadmin.tar.gz
+
+    - name: Extract phpMyAdmin
+      unarchive:
+        src: /tmp/phpmyadmin.tar.gz
+        dest: /var/www/html/
+        remote_src: yes
+
+    - name: Rename phpMyAdmin folder
+      shell: |
+        mv /var/www/html/phpMyAdmin-* /var/www/html/phpMyAdmin
+
+    - name: Set permissions for phpMyAdmin
+      file:
+        path: /var/www/html/phpMyAdmin
+        owner: apache
+        group: apache
+        recurse: yes
+
+    # 9. Restart Apache final
+    - name: Restart Apache
+      service:
+        name: httpd
+        state: restarted
