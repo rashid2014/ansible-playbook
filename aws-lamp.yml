@@ -8,72 +8,43 @@
 
   tasks:
 
-    # 1. Update system (AWS Step 1)
+    # -----------------------------
+    # 1. Update system
+    # -----------------------------
     - name: Update all packages
       dnf:
         name: "*"
         state: latest
 
-    # 2. Install Apache + PHP (AWS Step 1)
-    - name: Install Apache and PHP packages
+    # -----------------------------
+    # 2. Install required packages
+    # -----------------------------
+    - name: Install Apache, PHP, MariaDB
       dnf:
         name:
           - httpd
-          - wget
+          - mariadb105-server
           - php
           - php-fpm
           - php-mysqli
           - php-json
           - php-devel
+          - php-mbstring
+          - php-xml
+          - wget
+          - tar
         state: present
 
-    # 3. Install MariaDB (AWS Step 1)
-    - name: Install MariaDB server
-      dnf:
-        name: mariadb105-server
-        state: present
-
-    # 4. Start and enable services (AWS Step 1)
-    - name: Check Apache config
-      command: apachectl configtest
-      register: apache_test
-      changed_when: false
-      failed_when: >
-        ('Syntax OK' not in apache_test.stdout) and
-        ('Syntax OK' not in apache_test.stderr)
-
-    - name: Ensure php-fpm is running
-      service:
-        name: php-fpm
-        state: started
-        enabled: yes
-
-    - name: Start Apache only if config is valid
-      service:
-        name: httpd
-        state: started
-        enabled: yes
-
-    - name: Start and enable MariaDB
-      service:
-        name: mariadb
-        state: started
-        enabled: yes
-
-    - name: Start and enable php-fpm
-      service:
-        name: php-fpm
-        state: started
-        enabled: yes
-
-    # 5. Configure permissions (AWS Step 1)
+    # -----------------------------
+    # 3. Configure permissions (AWS best practice)
+    # -----------------------------
     - name: Add ec2-user to apache group
       user:
         name: ec2-user
         groups: apache
         append: yes
 
-    - name: Change ownership of /var/www
+    - name: Set ownership of /var/www
       file:
         path: /var/www
         owner: ec2-user
@@ -89,31 +60,49 @@
       shell: |
         find /var/www -type f -exec chmod 0664 {} \;
 
-    # 6. Test PHP (AWS Step 2)
-    - name: Create PHP test page
+    # -----------------------------
+    # 4. Start MariaDB first
+    # -----------------------------
+    - name: Start and enable MariaDB
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    # -----------------------------
+    # 5. Start PHP-FPM BEFORE Apache (CRITICAL FIX)
+    # -----------------------------
+    - name: Start and enable php-fpm
+      service:
+        name: php-fpm
+        state: started
+        enabled: yes
+
+    - name: Wait for php-fpm socket
+      wait_for:
+        path: /run/php-fpm/www.sock
+        timeout: 30
+
+    # -----------------------------
+    # 6. Start Apache AFTER php-fpm
+    # -----------------------------
+    - name: Start and enable Apache
+      service:
+        name: httpd
+        state: started
+        enabled: yes
+
+    # -----------------------------
+    # 7. Create PHP test page
+    # -----------------------------
+    - name: Create PHP info page
       copy:
         dest: /var/www/html/phpinfo.php
         content: "<?php phpinfo(); ?>"
 
-    # 7. Install phpMyAdmin dependencies (AWS Step 4)
-    - name: Install phpMyAdmin dependencies
-      dnf:
-        name:
-          - php-mbstring
-          - php-xml
-        state: present
-
-    - name: Restart Apache after PHP modules
-      service:
-        name: httpd
-        state: restarted
-
-    - name: Restart php-fpm
-      service:
-        name: php-fpm
-        state: restarted
-
-    # 8. Install phpMyAdmin manually (AWS Step 4)
+    # -----------------------------
+    # 8. Install phpMyAdmin manually
+    # -----------------------------
     - name: Download phpMyAdmin
       get_url:
         url: https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz
@@ -125,8 +114,9 @@
         dest: /var/www/html/
         remote_src: yes
 
-    - name: Rename phpMyAdmin folder
+    - name: Rename phpMyAdmin directory
       shell: |
+        rm -rf /var/www/html/phpMyAdmin
         mv /var/www/html/phpMyAdmin-* /var/www/html/phpMyAdmin
 
     - name: Set permissions for phpMyAdmin
@@ -136,7 +126,21 @@
         group: apache
         recurse: yes
 
-    # 9. Restart Apache final
+    - name: Create phpMyAdmin config
+      copy:
+        dest: /var/www/html/phpMyAdmin/config.inc.php
+        content: |
+          <?php
+          $cfg['blowfish_secret'] = 'mysecretkey';
+          $i = 0;
+          $i++;
+          $cfg['Servers'][$i]['auth_type'] = 'cookie';
+          $cfg['Servers'][$i]['host'] = 'localhost';
+          $cfg['Servers'][$i]['AllowNoPassword'] = false;
+
+    # -----------------------------
+    # 9. Restart Apache (final)
+    # -----------------------------
     - name: Restart Apache
       service:
         name: httpd
